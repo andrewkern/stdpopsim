@@ -1461,7 +1461,9 @@ class TestGenomicElementTypes(PiecewiseConstantSizeMixin):
                         mt.dominance_coeff_list, md["slim_mutation_type_id"][1:]
                     ):
                         assert str(k) in slim_mt_info
-                        assert np.allclose(slim_mt_info[str(k)][0]["dominanceCoeff"], h)
+                        assert np.allclose(
+                            slim_mt_info[str(k)][0]["dominanceCoeff"][0]["fitnessT"], h
+                        )
                         slim_to_mt_map[k] = mt
 
     def verify_genomic_elements(self, contig, ts):
@@ -1518,14 +1520,20 @@ class TestGenomicElementTypes(PiecewiseConstantSizeMixin):
                         self.slim_metadata_key0(slim_mt, "dominanceCoeff"), "fitnessT"
                     )
                 else:
-                    assert 0.5 == self.slim_metadata_key0(slim_mt, "dominanceCoeff")
+                    assert 0.5 == self.slim_metadata_key0(
+                        self.slim_metadata_key0(slim_mt, "dominanceCoeff"), "fitnessT"
+                    )
                     for h in mt.dominance_coeff_list:
                         mt_id = ge["mutationTypes"][ge_index]
                         ge_index += 1
                         assert str(mt_id) in mut_types
                         slim_mt = self.slim_metadata_key0(mut_types, str(mt_id))
                         assert np.allclose(
-                            h, self.slim_metadata_key0(slim_mt, "dominanceCoeff")
+                            h,
+                            self.slim_metadata_key0(
+                                self.slim_metadata_key0(slim_mt, "dominanceCoeff"),
+                                "fitnessT",
+                            ),
                         )
                 assert mt.distribution_type == self.slim_metadata_key0(
                     self.slim_metadata_key0(slim_mt, "distributionType"), "fitnessT"
