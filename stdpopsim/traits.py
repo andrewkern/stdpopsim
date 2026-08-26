@@ -931,7 +931,7 @@ def _check_distribution(distribution_type, distribution_args, dim):
 
 def _resolve_population_ids(traits_model, demographic_model):
     # Rewrite each condition's population_list, in place, so that
-    # populations are integer indices into the demographic model's
+    # populations are integer indices in the demographic model's
     # population list.
     pop_names = [pop.name for pop in demographic_model.model.populations]
     for event in traits_model.environments + traits_model.fitness_functions:
