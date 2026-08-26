@@ -195,7 +195,7 @@ class Trait:
     "identity": the observed value is equal to the latent value.
 
     "threshold" (parameters: t): the observed value is equal to 1 if the latent
-        value is less than t, and is equal to 0 otherwise.
+        value is greater than t, and is equal to 0 otherwise.
 
     "liability" (parameters center, slope): the observed value is equal to 1
         with probability 1 / (1 + exp((x - center) * slope)) for the latent value x,

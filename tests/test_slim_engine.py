@@ -3414,92 +3414,777 @@ class TestSpeciesProperties:
         assert ts.metadata["SLiM"]["separate_sexes"] is False
 
 
+@pytest.mark.filterwarnings(
+    "ignore::stdpopsim.UnspecifiedSLiMWarning",
+    "ignore::stdpopsim.SLiMScalingFactorWarning",
+    "ignore::UserWarning",
+)
 class TestTraits:
+    traits = [
+        stdpopsim.Trait(id="add1", type="additive"),
+        stdpopsim.Trait(id="add2", type="additive"),
+        stdpopsim.Trait(id="mult", type="multiplicative"),
+    ]
+    demography = msprime.Demography()
+    demography.add_population(name="A", initial_size=100)
+    demography.add_population(name="B", initial_size=50)
+    demography.add_population(name="anc", initial_size=20)
+    demography.add_population_split(
+        time=30,
+        derived=["A", "B"],
+        ancestral="anc"
+    )
+    demography = stdpopsim.DemographicModel(
+        id="traits_test_model",
+        description="a model for testing traits",
+        long_description="aa mmooddeell ffoorr tteessttiinngg ttrraaiittss",
+        generation_time=2,
+        model=demography
+    )
+    engine = stdpopsim.get_engine("slim")
+    species = stdpopsim.get_species("HomSap")
 
     def test_traits_defined(self):
-        traits = [
-            stdpopsim.Trait(id="add", type="additive"),
-            stdpopsim.Trait(id="mult", type="multiplicative"),
-        ]
-        tm = stdpopsim.TraitsModel(
-            traits=traits,
-        )
-        model = stdpopsim.PiecewiseConstantSize(10)
-        engine = stdpopsim.get_engine("slim")
-        species = stdpopsim.get_species("AnaPla")
-        contig = species.get_contig("chr1", left=1e7, right=1e7 + 1e4)
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+
         mt1 = stdpopsim.MutationType(
-            trait_ids=["add"], distribution_type="n", distribution_args=[0, 1e-4]
+            trait_ids=["add1"], distribution_type="n", distribution_args=[0, 1e-4]
         )
         mt2 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), 1e-4*np.eye(2)]
+        )
+        mt3 = stdpopsim.MutationType(
             trait_ids=["mult"], distribution_type="e", distribution_args=[1]
         )
+
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
         dme = stdpopsim.DistributionOfMutationEffects(
-            mutation_types=[mt1, mt2], proportions=[0.3, 0.7]
+            mutation_types=[mt1, mt2, mt3], proportions=[0.3, 0.6, 0.1]
         )
-        contig.add_dme(intervals=np.array([[1e7, 1e7 + 1e4]]), DME=dme)
-        ts = engine.simulate(
-            model, contig, samples={"pop_0": 3}, traits_model=tm, seed=7
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
         )
+
         slim_traits = ts.metadata["SLiM"]["traits"]
         assert [
             stdpopsim.Trait(id="fitness", type="multiplicative")
-        ] + traits == tm.traits
+        ] + self.traits == tm.traits
         assert len(tm.traits) == len(slim_traits)
         for t, slim_t in zip(tm.traits, slim_traits):
             print(slim_t)
             assert t.id + "T" == slim_t["name"]
             assert t.type == slim_t["type"]
 
-    def test_traits_deepcopy(self):
-        traits = [
-            stdpopsim.Trait(id="add", type="additive"),
-            stdpopsim.Trait(id="also_add", type="additive"),
-        ]
-        tm = stdpopsim.TraitsModel(
-            traits=traits,
+        contig = self.species.get_contig("chr1", left=0, right=100)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt2, mt3], proportions=[0.5, 0.5]
         )
-        pops_fit = ["CEU", "YRI"]
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert [
+            stdpopsim.Trait(id="fitness", type="multiplicative")
+        ] + self.traits == tm.traits
+        assert len(tm.traits) == len(slim_traits)
+        for t, slim_t in zip(tm.traits, slim_traits):
+            print(slim_t)
+            assert t.id + "T" == slim_t["name"]
+            assert t.type == slim_t["type"]
+
+    def test_check_traits_model_contig_consistency_errors(self):
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1"], distribution_type="n", distribution_args=[0, 1e-4]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), 1e-4*np.eye(2)]
+        )
+        mt3 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        mt4 = stdpopsim.MutationType(
+            trait_ids=["num_nostrils"], distribution_type="f", distribution_args=[4]
+        )
+
+        contig = self.species.get_contig("chr1", left=0, right=100)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt2, mt3, mt4], proportions=[0.5, 0.4, 0.1]
+        )
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+
+        with pytest.raises(ValueError, match="MutationTypes contain"):
+            self.engine.simulate(
+                self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+            )
+
+        contig = self.species.get_contig("chr1", left=0, right=100)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.2, 0.8]
+        )
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+
+        with pytest.raises(ValueError, match="There is a trait in"):
+            self.engine.simulate(
+                self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+            )
+
+    # the traits model gets deep copied and modified at the
+    # beginning of slim_engine.simulate. We want to make sure here that that
+    # modification doesn't percolate back to the traits model
+    # provided by the user.
+    def test_traits_deepcopy(self):
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+        pops_fit = ["A", "B"]
         tm.add_fitness_function(
             id="main",
-            trait_ids=["add"],
+            trait_ids=["add1"],
             function_type="gaussian",
             function_args=[np.zeros(1), np.eye(1)],
             time_intervals=[(0, 1)],
             population_list=pops_fit,
         )
-        pops_env = ["CHB", "YRI", "CEU"]
+        pops_env = ["A", "B", "anc"]
         tm.add_environment(
             id="env1",
-            trait_ids=["add", "also_add"],
+            trait_ids=["add1", "add2"],
             distribution_type="mvn",
             distribution_args=[np.zeros(2), np.eye(2)],
             time_intervals=[(0, float("inf"))],
             population_list=pops_env,
         )
-        engine = stdpopsim.get_engine("slim")
-        species = stdpopsim.get_species("HomSap")
 
-        model = species.get_demographic_model("OutOfAfrica_3G09")
-        contig = species.get_contig("chr22")
+        contig = contig = self.species.get_contig("chr1", left=0, right=100)
         mt1 = stdpopsim.MutationType(
-            trait_ids=["add"], distribution_type="n", distribution_args=[0, 1e-4]
+            trait_ids=["add1"], distribution_type="n", distribution_args=[0, 1e-4]
         )
         mt2 = stdpopsim.MutationType(
-            trait_ids=["also_add"], distribution_type="e", distribution_args=[1]
+            trait_ids=["add2"], distribution_type="e", distribution_args=[1]
         )
-        dme = stdpopsim.DistributionOfMutationEffects(
-            mutation_types=[mt1, mt2], proportions=[0.3, 0.7]
+        mt3 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
         )
-        contig.add_dme(intervals=np.array([[1e7, 1e7 + 1e4]]), DME=dme)
 
-        engine.simulate(
-            model,
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2, mt3], proportions=[0.3, 0.6, 0.1]
+        )
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+
+        self.engine.simulate(
+            self.demography,
             contig,
-            samples={"CEU": 3},
+            samples={"A": 3},
             traits_model=tm,
             seed=7,
-            slim_scaling_factor=250,
         )
         assert tm.fitness_functions[0].population_list == pops_fit
         assert tm.environments[0].population_list == pops_env
+
+    def test_simulation_start_time(self):
+        # check if we have a fitness function or environment that pre-dates the
+        # demography, then the oldest event should be relative to that.
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), 1e-4*np.eye(2)]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100]]), DME=dme)
+
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_environment(
+            id="env1",
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, float("inf"))],
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_environment(
+            id="env2",
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, float("inf"))],
+            population_list=["A"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_environment(
+            id="env3",
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(30, float("inf"))],
+            population_list=["anc"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_environment(
+            id="env4",
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, 50)],
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 251
+
+        tm.add_environment(
+            id="env4",
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(50, 70)],
+            population_list=["anc"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 271
+
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+        tm.add_fitness_function(
+            id="fit1",
+            trait_ids=["add1", "add2"],
+            function_type="mvn",
+            function_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, float("inf"))],
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_fitness_function(
+            id="fit2",
+            trait_ids=["add1", "add2"],
+            function_type="mvn",
+            function_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, float("inf"))],
+            population_list=["A"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_fitness_function(
+            id="fit3",
+            trait_ids=["add1", "add2"],
+            function_type="mvn",
+            function_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(30, float("inf"))],
+            population_list=["anc"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 231
+
+        tm.add_fitness_function(
+            id="fit4",
+            trait_ids=["add1", "add2"],
+            function_type="mvn",
+            function_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(0, 50)],
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 251
+
+        tm.add_fitnesss_function(
+            id="fit5",
+            trait_ids=["add1", "add2"],
+            function_type="mvn",
+            function_args=[np.zeros(2), np.eye(2)],
+            time_intervals=[(50, 70)],
+            population_list=["anc"]
+        )
+        ts = self.engine.simulate(
+            self.demography, contig, samples={"A": 3}, traits_model=tm, seed=7
+        )
+        assert ts.metadata['SLiM']['tick'] == 271
+
+    # TODO
+    def test_environments(self):
+        pass
+
+    def test_trait_transformation_threshold(self):
+        traits = [
+            stdpopsim.Trait(
+                id="add1",
+                type="additive",
+                transform="threshold",
+                transform_args=[0]
+            ),
+            stdpopsim.Trait(
+                id="add2",
+                type="additive",
+                transform="threshold",
+                transform_args=[0]
+            ),
+            stdpopsim.Trait(
+                id="mult",
+                type="multiplicative",
+                transform="threshold",
+                transform_args=[0]
+            ),
+        ]
+        tm = stdpopsim.TraitsModel(traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[
+                np.array([-1e-15, 1e-15]),
+                1e-34*np.eye(2)
+            ]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        # run 5 simulations to test really well
+        for i in range(5):
+            ts = self.engine.simulate(
+                self.demography,
+                contig,
+                samples={"A": 100},
+                traits_model=tm,
+                seed=7+i
+            )
+
+            assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+            assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+            assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+            assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+
+            add1_phenos = []
+            add2_phenos = []
+            mult_phenos = []
+            for ind in ts.individuals():
+                # no direct effects on fitness
+                assert ind.metadata['per_trait'][0]["phenotype"] == 1.
+                add1_phenos.append(ind.metadata['per_trait'][1]["phenotype"])
+                add2_phenos.append(ind.metadata['per_trait'][2]["phenotype"])
+                mult_phenos.append(ind.metadata['per_trait'][3]["phenotype"])
+
+            # probability of being 1 should be astronomically small because
+            # mutations have huge negative effects
+            assert np.all(np.array(add1_phenos) == 0)
+
+            assert np.mean(add2_phenos) == 1
+
+            # probability of being 0 should be astronomically small because
+            # mutations all have positive effects and the untransformed phenotype
+            # is multiplicative
+            assert np.all(np.array(mult_phenos) == 1)
+
+        # Now we'll vary the transform parameters
+        traits = [
+            stdpopsim.Trait(
+                id="add1",
+                type="additive",
+                transform="threshold",
+                transform_args=[-1],
+            ),
+            stdpopsim.Trait(
+                id="add2",
+                type="additive",
+                transform="threshold",
+                transform_args=[0.1]
+            ),
+            stdpopsim.Trait(
+                id="mult",
+                type="multiplicative",
+                transform="threshold",
+                transform_args=[2]
+            ),
+        ]
+        tm = stdpopsim.TraitsModel(traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[
+                np.array([0., 0.]),
+                1e-20*np.eye(2)
+            ]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1e-40]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        # run 5 simulations to test really well
+        for i in range(5):
+            ts = self.engine.simulate(
+                self.demography,
+                contig,
+                samples={"A": 100},
+                traits_model=tm,
+                seed=7+i
+            )
+
+            assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+            assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+            assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+            assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+
+            add1_phenos = []
+            add2_phenos = []
+            mult_phenos = []
+            for ind in ts.individuals():
+                # no direct effects on fitness
+                assert ind.metadata['per_trait'][0]["phenotype"] == 1.
+                add1_phenos.append(ind.metadata['per_trait'][1]["phenotype"])
+                add2_phenos.append(ind.metadata['per_trait'][2]["phenotype"])
+                mult_phenos.append(ind.metadata['per_trait'][3]["phenotype"])
+
+            # all of the raw phenotypes for these two traits should be ~0, but
+            # the thresholds are -1 and 0.1
+            assert np.all(np.array(add1_phenos) == 1)
+            assert np.all(np.array(add2_phenos) == 0)
+
+            # all the raw phenotypes should be ~1, but the threshold is 2
+            assert np.all(np.array(mult_phenos) == 0)
+
+    def test_trait_transformation_liability(self):
+        traits = [
+            stdpopsim.Trait(
+                id="add1",
+                type="additive",
+                transform="liability",
+                transform_args=[0, 1]
+            ),
+            stdpopsim.Trait(
+                id="add2",
+                type="additive",
+                transform="liability",
+                transform_args=[0, 1]
+            ),
+            stdpopsim.Trait(
+                id="mult",
+                type="multiplicative",
+                transform="liability",
+                transform_args=[0, 1]
+            ),
+        ]
+        tm = stdpopsim.TraitsModel(traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[
+                np.array([-17., 0.]),
+                1e-20*np.eye(2)
+            ]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        # run 5 simulations to test really well
+        for i in range(5):
+            ts = self.engine.simulate(
+                self.demography,
+                contig,
+                samples={"A": 100},
+                traits_model=tm,
+                seed=7+i
+            )
+
+            assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+            assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+            assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+            assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+
+            add1_phenos = []
+            add2_phenos = []
+            mult_phenos = []
+            for ind in ts.individuals():
+                # no direct effects on fitness
+                assert ind.metadata['per_trait'][0]["phenotype"] == 1.
+                add1_phenos.append(ind.metadata['per_trait'][1]["phenotype"])
+                add2_phenos.append(ind.metadata['per_trait'][2]["phenotype"])
+                mult_phenos.append(ind.metadata['per_trait'][3]["phenotype"])
+
+            # probability of being 1 should be astronomically small because
+            # mutations have huge negative effects
+            assert np.all(np.array(add1_phenos) == 0)
+
+            # These should be ~ 50/50 0 and 1 because mutations have tiny effects
+            assert np.mean(add2_phenos) > 0.25
+            assert np.mean(add2_phenos) < 0.75
+
+            # probability of being 0 should be astronomically small because
+            # mutations all have positive effects and the untransformed phenotype
+            # is multiplicative
+            assert np.all(np.array(mult_phenos) == 1)
+
+        # Now we'll vary the transform parameters
+        traits = [
+            stdpopsim.Trait(
+                id="add1",
+                type="additive",
+                transform="liability",
+                transform_args=[0, 1e-20]
+            ),
+            stdpopsim.Trait(
+                id="add2",
+                type="additive",
+                transform="liability",
+                transform_args=[1, 1]
+            ),
+            stdpopsim.Trait(
+                id="mult",
+                type="multiplicative",
+                transform="liability",
+                transform_args=[-1, 1]
+            ),
+        ]
+        tm = stdpopsim.TraitsModel(traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[
+                np.array([-1., 0.]),
+                1e-20*np.eye(2)
+            ]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1e-40]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        # run 5 simulations to test really well
+        for i in range(5):
+            ts = self.engine.simulate(
+                self.demography,
+                contig,
+                samples={"A": 100},
+                traits_model=tm,
+                seed=7+i
+            )
+
+            assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+            assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+            assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+            assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+
+            add1_phenos = []
+            add2_phenos = []
+            mult_phenos = []
+            for ind in ts.individuals():
+                # no direct effects on fitness
+                assert ind.metadata['per_trait'][0]["phenotype"] == 1.
+                add1_phenos.append(ind.metadata['per_trait'][1]["phenotype"])
+                add2_phenos.append(ind.metadata['per_trait'][2]["phenotype"])
+                mult_phenos.append(ind.metadata['per_trait'][3]["phenotype"])
+
+            # These should be ~ 50/50 --- the mutations all have negative effects,
+            # but the slope of the logistic transform is really, really shallow
+            assert np.mean(add1_phenos) > 0.25
+            assert np.mean(add1_phenos) < 0.75
+
+            # These should have a mean of 0.27 for the parameters we chose assuming
+            # that mutation effects are negligible
+            assert np.mean(add2_phenos) > 0.02
+            assert np.mean(add2_phenos) < 0.52
+
+            # These should have a mean of 0.73 for the parameters we chose
+            # assuming that the mutation effects are negligible
+            assert np.mean(mult_phenos) > 0.48
+            assert np.mean(mult_phenos) < 0.98
+
+    # TODO
+    def test_fitness(self):
+        pass
+
+    def test_dme(self):
+        # tests "mvn" for multivariate traits
+        # tests "e" for univariate traits just to make sure that this works for
+        # non-fitness univariate traits.  All other distributions for
+        # univariate traits should be covered by DFE testing so here we are
+        # just testing that having any univariate distribution for a trait other
+        # than fitness works.
+        tm = stdpopsim.TraitsModel(traits=self.traits)
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[-3*np.ones(2), 0.01*np.eye(2)]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        ts = self.engine.simulate(
+            self.demography,
+            contig,
+            samples={"A": 3},
+            traits_model=tm,
+            seed=7,
+            keep_mutation_ids_as_alleles=True
+        )
+        assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+        assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+        assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+        assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+        mt1_muts_add1 = []
+        mt1_muts_add2 = []
+        mt2_muts = []
+
+        # make sure we have some mutations
+        assert len(ts.metadata["SLiM_mutation_list"]) > 200
+
+        for mut in ts.metadata["SLiM_mutation_list"]:
+            # no direct effect on fitness
+            assert mut["per_trait"][0]["effect_size"] == 0
+            if mut["mutation_type"] == 1:
+                assert mut["per_trait"][3]["effect_size"] == 0
+                mt1_muts_add1.append(mut["per_trait"][1]["effect_size"])
+                mt1_muts_add2.append(mut["per_trait"][2]["effect_size"])
+            elif mut["mutation_type"] == 2:
+                assert mut["per_trait"][1]["effect_size"] == 0
+                assert mut["per_trait"][2]["effect_size"] == 0
+                mt2_muts.append(mut["per_trait"][3]["effect_size"])
+            else:
+                assert False
+
+        # These means should really not be 20 SDs away from the mean
+        assert np.mean(mt1_muts_add1) > -5
+        assert np.mean(mt1_muts_add1) < -1
+        assert np.mean(mt1_muts_add2) > -5
+        assert np.mean(mt1_muts_add2) < -1
+
+        cov_matrix = np.cov(mt1_muts_add1, mt1_muts_add2)
+        assert cov_matrix[0, 0] < 0.02
+        assert cov_matrix[0, 0] > 0.002
+        assert cov_matrix[0, 1] < 0.001
+        assert cov_matrix[0, 1] > 0
+        assert cov_matrix[1, 1] < 0.02
+        assert cov_matrix[1, 1] > 0.002
+
+        assert np.all(np.array(mt2_muts) > 0)
+        assert np.mean(mt2_muts) < 1.75
+        assert np.mean(mt2_muts) > 0.25
+        assert np.var(mt2_muts) < 4
+        assert np.var(mt2_muts) > 0.25
+
+        # repeat but with correlated effects
+        mt1 = stdpopsim.MutationType(
+            trait_ids=["add1", "add2"],
+            distribution_type="mvn",
+            distribution_args=[
+                np.array([17., -17.]),
+                0.009 * np.ones((2, 2)) + 0.001*np.eye(2)
+            ]
+        )
+        mt2 = stdpopsim.MutationType(
+            trait_ids=["mult"], distribution_type="e", distribution_args=[1]
+        )
+        contig = self.species.get_contig("chr1", left=0, right=100e6)
+        dme = stdpopsim.DistributionOfMutationEffects(
+            mutation_types=[mt1, mt2], proportions=[0.5, 0.5]
+        )
+        contig.add_dme(intervals=np.array([[0, 100e6]]), DME=dme)
+
+        ts = self.engine.simulate(
+            self.demography,
+            contig,
+            samples={"A": 3},
+            traits_model=tm,
+            seed=7,
+            keep_mutation_ids_as_alleles=True
+        )
+        assert ts.metadata["SLiM"]["traits"][0]["name"] == "fitnessT"
+        assert ts.metadata["SLiM"]["traits"][1]["name"] == "add1T"
+        assert ts.metadata["SLiM"]["traits"][2]["name"] == "add2T"
+        assert ts.metadata["SLiM"]["traits"][3]["name"] == "multT"
+        mt1_muts_add1 = []
+        mt1_muts_add2 = []
+        mt2_muts = []
+
+        assert len(ts.metadata["SLiM_mutation_list"]) > 200
+
+        for mut in ts.metadata["SLiM_mutation_list"]:
+            # no direct effect on fitness
+            assert mut["per_trait"][0]["effect_size"] == 0
+            if mut["mutation_type"] == 1:
+                assert mut["per_trait"][3]["effect_size"] == 0
+                mt1_muts_add1.append(mut["per_trait"][1]["effect_size"])
+                mt1_muts_add2.append(mut["per_trait"][2]["effect_size"])
+            elif mut["mutation_type"] == 2:
+                assert mut["per_trait"][1]["effect_size"] == 0
+                assert mut["per_trait"][2]["effect_size"] == 0
+                mt2_muts.append(mut["per_trait"][3]["effect_size"])
+            else:
+                assert False
+
+        assert np.mean(mt1_muts_add1) > 15
+        assert np.mean(mt1_muts_add1) < 19
+        assert np.mean(mt1_muts_add2) > -19
+        assert np.mean(mt1_muts_add2) < -15
+
+        cov_matrix = np.cov(mt1_muts_add1, mt1_muts_add2)
+        assert cov_matrix[0, 0] < 0.02
+        assert cov_matrix[0, 0] > 0.002
+        assert np.corrcoef(mt1_muts_add1, mt1_muts_add2)[0, 1] > 0.8
+        assert cov_matrix[1, 1] < 0.02
+        assert cov_matrix[1, 1] > 0.002
+
+        assert np.all(np.array(mt2_muts) > 0)
+        assert np.mean(mt2_muts) < 1.75
+        assert np.mean(mt2_muts) > 0.25
+        assert np.var(mt2_muts) < 4
+        assert np.var(mt2_muts) > 0.25

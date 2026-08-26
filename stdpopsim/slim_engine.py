@@ -1079,7 +1079,10 @@ def msprime_rm_to_slim_rm(recombination_map):
     return rates, ends[1:]
 
 
-# TODO: write tests for this in test_slim_engine.py
+# TODO: do we want to check if the DMEs in the contig are actually going to get
+# simulated?  E.g., you could have a bunch of mutation types that are not
+# applied anywhere in the part of the contig that's actually going to be
+# simulated.
 def _check_traits_model_contig_consistency(contig, traits_model):
     mt_traits = []
     for dme in contig.dme_list:
